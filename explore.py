@@ -19,6 +19,8 @@ import json
 # Astra Perseverance Version
 version = "1.0.6"
 
+proxyhist_exists = True
+
 # Astra guardrail test parameter defaults
 tp_mv = 2         # Number of materialized views per table
 tp_si = 1        # Number of indexes per table
@@ -272,6 +274,8 @@ def get_oss_ver(cvpath):
 
 # collect the dc name for each node
 def get_dc(rootPath,statuspath,node):
+
+  print('get dc', statuspath)
   if(path.exists(statuspath)):
     statusFile = open(statuspath, 'r')
     dc = ''
@@ -408,6 +412,7 @@ def is_nan(x):
 def write_row(sheet_name,row_data,d_format,blank_col=[]):
   for col_num,data in enumerate(row_data):
     if col_num not in blank_col:
+      # print(sheet_name, col_num, row[sheet_name])
       try:
         if (sheet_name=='ph' or sheet_name=='rlatency'  or sheet_name=='wlatency'):
           stats_sheets[sheet_name].write(row[sheet_name],col_num, float(data.strip('ms').strip()), num_format2)
@@ -448,6 +453,7 @@ sheets_data.append({'sheet_name':'partition','tab_name':'Large Partitions','free
 sheets_data.append({'sheet_name':'sstable','tab_name':'SSTable Count','freeze_row':1,'freeze_col':0,'cfstat_filter':'SSTable count','headers':['Example Node','DC','Keyspace','Table','SSTable Count'],'widths':[18,14,14,25,15],'filter_type':'>=','filter':tp_sstbl,'strip':'','extra':1,'comment':'Tables with number of sstables greater than '+str(tp_sstbl)+'.','tp_type':'sstbl'})
 sheets_data.append({'sheet_name':'rlatency','tab_name':'Read Latency','freeze_row':1,'freeze_col':0,'cfstat_filter':'Local read latency','headers':['Node','DC','Keyspace','Table','Read Latency (ms)'],'widths':[18,14,14,25,20],'filter_type':'>=','filter':tp_rl,'strip':'ms','extra':0,'comment':'Tables with read latency greater than '+str(tp_rl)+'ms. (cfstats)','tp_type':'rl'})
 sheets_data.append({'sheet_name':'wlatency','tab_name':'Write Latency','freeze_row':1,'freeze_col':0,'cfstat_filter':'Local write latency','headers':['Node','DC','Keyspace','Table','Write Latency (ms)'],'widths':[18,14,14,25,20],'filter_type':'>=','filter':tp_wl,'strip':'ms','extra':0,'comment':'Tables with write latency greater than '+str(tp_wl)+'ms. (cfstats)','tp_type':'wl'})
+print('Sheets created')
 #sheets_data.append({'sheet_name':'ts','tab_name':'Tombstones','headers':['Node','DC','Keyspace','Table','Write Latency (ms)'],'extra':0})
 gc_comment='NOTE: The GC pauses on this sheet are based on GC pauses over 200ms (default setting).  Pauses under 200ms are not recorded in the system logs.'
 
@@ -536,6 +542,7 @@ for database_url in data_url:
   total_writes = 0
   read_count = []
   write_count = []
+  node_rw_count = {}
   table_count = []
   field_count = {}
   table_tps={}
@@ -572,7 +579,7 @@ for database_url in data_url:
   workloads = {}
   warnings = {'Astra Guardrails':{},'Database Health':{}}
 
-  rootPath = database_url + '/nodes/'
+  rootPath = database_url
   
   # create summary json array
   summary_json = {}
@@ -584,12 +591,15 @@ for database_url in data_url:
   summary_json['dataset_size']={}
   summary_json['dataset_size']['total']=0
   summary_json['missing_data']=0
-
+  summary_json['workload_node']={}
+    
 #  summary_json.append('guardrails'={})
 #  summary_json.append('health':{})
  
   # collect node info
   for node_path in os.listdir(rootPath):
+
+    print(f"Node path: {node_path}")
     nodetoolpath = rootPath + node_path + '/nodetool'
     if path.exists(nodetoolpath):
       node = extract_ip(node_path)
@@ -607,7 +617,7 @@ for database_url in data_url:
               node_ip[node]=ip_addr
             elif ip_addr==node.replace('-','.'):
               node_ip[node]=ip_addr
-  statusFile.close()
+        statusFile.close()
 
   for node_path in os.listdir(rootPath):
     statuspath = rootPath + node_path + '/nodetool/status'
@@ -649,6 +659,7 @@ for database_url in data_url:
               max_gc[database_name]=''
 
         schemapath = rootPath + node_path + '/driver'
+        print("Looking schema: ",schemapath)
         if path.isdir(schemapath):
           try:
             schemaFile = open(schemapath + '/schema', 'r')
@@ -723,8 +734,10 @@ for database_url in data_url:
   for node_path in os.listdir(rootPath):
     if initial_run==1:
       nodetoolpath = rootPath + node_path + '/nodetool'
+      print(f"nodetoolpath {nodetoolpath}")
       if path.exists(nodetoolpath):
         node = extract_ip(node_path)
+        print(f"Node {node}")
         if (node==''):
           node=node_path
         if node in node_ip:
@@ -735,10 +748,12 @@ for database_url in data_url:
               ks = ''
               tbl = ''
               create_stmt = {}
+              print(f"Tbldata {node}")
               tbl_data = {}
               schemapath = rootPath + node_path + '/driver'
               if path.isdir(schemapath):
                 schemaFile = open(schemapath + '/schema', 'r')
+                print("reading Schema")
                 for line in schemaFile:
                   line = line.strip('\n').strip()
                   if (line==''): tbl=''
@@ -888,6 +903,8 @@ for database_url in data_url:
         # initialize node variables
         iodata = {}
         iodata[node] = {}
+        print("add node", node) 
+        node_rw_count[node] = {}
         keyspace = ''
         table = ''
         dc = ''
@@ -920,6 +937,16 @@ for database_url in data_url:
                 table_tps[ks]={}
                 summary_json['workload'][ks]={}
                 summary_json['dataset_size'][ks]={}
+                print("add ks", node, ks, dc)
+                node_rw_count[node][ks] = {}
+
+              try:
+                type(node_rw_count[node][ks])
+              except:
+                print("add ks", node, ks)
+                node_rw_count[node][ks] = {}
+
+
               if('Table: ' in line):
                 tbl = line.split(':')[1].strip()
                 is_index = 0
@@ -930,12 +957,22 @@ for database_url in data_url:
                 tbl = line.split(':')[1].strip()
                 is_index = 0
               if(tbl!=''):
+
                 try:
                   type(table_tps[ks][tbl])
                 except:
                   table_tps[ks][tbl]={'write':0,'read':0}
                   summary_json['workload'][ks][tbl]={}
                   summary_json['dataset_size'][ks][tbl]={}
+                  print("add ks tbl", node, ks, tbl)
+                  node_rw_count[node][ks][tbl] = {}   
+
+                try:
+                  type(node_rw_count[node][ks][tbl])
+                except:
+                  print("add ks tbl", node, ks, tbl)
+                  node_rw_count[node][ks][tbl] = {}   
+
                 if ('Space used (live):' in line):
                   try:
                     tsize = float(line.split(':')[1].strip()) / tbl_data[ks]['rf']
@@ -976,6 +1013,12 @@ for database_url in data_url:
                       read_table[ks][tbl] += count
                     except:
                       read_table[ks][tbl] = count
+
+                    if count > 0:
+                      node_rw_count[node][ks][tbl]['read_count'] = count
+                      node_rw_count[node][ks][tbl]['read_tps'] = float(count) / float(node_uptime[node])
+
+                    
                 if('Local write count: ' in line):
                   try:
                     count = int(line.split(':')[1].strip()) / tbl_data[ks]['rf']
@@ -996,6 +1039,12 @@ for database_url in data_url:
                       write_table[ks][tbl] += count
                     except:
                       write_table[ks][tbl] = count
+
+                    if count > 0:
+                      node_rw_count[node][ks][tbl]['write_count'] = count
+                      node_rw_count[node][ks][tbl]['write_tps'] = float(count) / float(node_uptime[node])
+        
+        # Collects the statistics per node
 
   # total up R/W across all nodes
   for ks,readtable in list(read_table.items()):
@@ -1020,30 +1069,31 @@ for database_url in data_url:
   total_rw = total_reads+total_writes
     
   # collect GC/Tomstone Data
-  rootPath = database_url + '/nodes/'
-  for node_path in os.listdir(rootPath):
-    nodetoolpath = rootPath + node_path + '/nodetool'
-    if path.exists(nodetoolpath):
-      node = extract_ip(node_path)
-      if (node==''):
-        node=node_path
-      if node in node_ip:
-        systemlogpath = rootPath + node_path + '/logs/cassandra/'
-        systemlog = systemlogpath + 'system.log'
-        jsppath1 = rootPath + node_path + '/java_system_properties.json'
-        jsppath2 = rootPath + node_path + '/java_system_properties.txt'
-        infopath = rootPath + node_path + '/nodetool/info'
-        if(path.exists(systemlog)):
-          statuspath = rootPath + node_path + '/nodetool/status'
-          node_gcpause[node] = []
-          newest_gc[node]={'jd':0.0,'dt':''}
-          oldest_gc[node]={'jd':99999999999.9,'dt':''}
-          max_gc[node]=''
-          tz[node]='UTC'
-          for logfile in os.listdir(systemlogpath):
-            if(logfile.split('.')[0] == 'system'):
-              systemlog = systemlogpath + logfile
-              parseGC_TS(node,systemlog,systemlogpath)
+  rootPath = database_url + ''
+  if (path.exists(rootPath)):
+    for node_path in os.listdir(rootPath):
+      nodetoolpath = rootPath + node_path + '/nodetool'
+      if path.exists(nodetoolpath):
+        node = extract_ip(node_path)
+        if (node==''):
+          node=node_path
+        if node in node_ip:
+          systemlogpath = rootPath + node_path + '/logs/cassandra/'
+          systemlog = systemlogpath + 'system.log'
+          jsppath1 = rootPath + node_path + '/java_system_properties.json'
+          jsppath2 = rootPath + node_path + '/java_system_properties.txt'
+          infopath = rootPath + node_path + '/nodetool/info'
+          if(path.exists(systemlog)):
+            statuspath = rootPath + node_path + '/nodetool/status'
+            node_gcpause[node] = []
+            newest_gc[node]={'jd':0.0,'dt':''}
+            oldest_gc[node]={'jd':99999999999.9,'dt':''}
+            max_gc[node]=''
+            tz[node]='UTC'
+            for logfile in os.listdir(systemlogpath):
+              if(logfile.split('.')[0] == 'system'):
+                systemlog = systemlogpath + logfile
+                parseGC_TS(node,systemlog,systemlogpath)
 
   # collect GC/Tombstone data from additional log path
   addlogs = './AdditionalLogs'
@@ -1132,11 +1182,11 @@ for database_url in data_url:
   for sheet_array in sheets_data:
     if (sheet_array['sheet_name'] not in exclude_tab):
       stats_sheets[sheet_array['sheet_name']] = workbook.add_worksheet(sheet_array['tab_name'])
-      stats_sheets[sheet_array['sheet_name']].freeze_panes(sheet_array['freeze_row'],sheet_array['freeze_col'])
+      # stats_sheets[sheet_array['sheet_name']].freeze_panes(sheet_array['freeze_row'],sheet_array['freeze_col'])
   ts_worksheet = workbook.add_worksheet('Tombstones')
-  ts_worksheet.freeze_panes(1,0)
+  # ts_worksheet.freeze_panes(1,0)
   gc_worksheet = workbook.add_worksheet('GC Pauses')
-  gc_worksheet.freeze_panes(2,0)
+  # gc_worksheet.freeze_panes(2,0)
 
   # Create Formats
   header_format1 = workbook.add_format({
@@ -1375,141 +1425,143 @@ for database_url in data_url:
   lpar_gr_array=[]
   lpar_tp_array=[]
   sheet_header = 0
+  if (path.exists(rootPath)):
+    for node_path in os.listdir(rootPath):
+      nodetoolpath = rootPath + node_path + '/nodetool'
+      if path.exists(nodetoolpath):
+        print('nodetoolpath', nodetoolpath)
+        node = extract_ip(node_path)
+        if (node==''):
+          node=node_path
+        if node in node_ip:
+          print('node', node)
+          for sheet_array in sheets_data:
+            if (sheet_array['sheet_name'] not in exclude_tab):
+              headers[sheet_array['sheet_name']] = sheet_array['headers']
+              col_widths[sheet_array['sheet_name']] = sheet_array['widths']
+              sheets_record[sheet_array['sheet_name']]={}
+          # print('Row Init')
+          for sheet_name,sheet_obj in list(stats_sheets.items()):
+            if sheet_name == 'ph' and sheet_header==0:
+              sheet_header=1
+              sheet_obj.merge_range('A1:I1','Coordinating Node Read Latency (ms)',title_format3)
+              sheet_obj.merge_range('K1:S1','Coordinating Node Write Latency (ms)',title_format3)
+              row[sheet_name]=1
+            elif sheet_name == 'ph':
+              row[sheet_name]=1
+            else:
+              row[sheet_name]=0
+            for col_num,header in enumerate(headers[sheet_name]):
+              if header != '':
+                sheet_obj.write(row[sheet_name],col_num,header,title_format)
+            for col_num,col_width in enumerate(col_widths[sheet_name]):
+              sheet_obj.set_column(col_num,col_num,col_width)
+            row[sheet_name]+=1
 
-  for node_path in os.listdir(rootPath):
-    nodetoolpath = rootPath + node_path + '/nodetool'
-    if path.exists(nodetoolpath):
-      node = extract_ip(node_path)
-      if (node==''):
-        node=node_path
-      if node in node_ip:
-        for sheet_array in sheets_data:
-          if (sheet_array['sheet_name'] not in exclude_tab):
-            headers[sheet_array['sheet_name']] = sheet_array['headers']
-            col_widths[sheet_array['sheet_name']] = sheet_array['widths']
-            sheets_record[sheet_array['sheet_name']]={}
+          # collect dc name
+          dc = ''
+          info = rootPath + node_path + '/nodetool/info'
+          infoFile = open(info, 'r')
+          for line in infoFile:
+            if('Data Center' in line):
+              dc = line.split(':')[1].strip()
+              try:
+                type(proxyhistData[dc])
+              except:
+                proxyhistData[dc]={}
 
-        for sheet_name,sheet_obj in list(stats_sheets.items()):
-          if sheet_name == 'ph' and sheet_header==0:
-            sheet_header=1
-            sheet_obj.merge_range('A1:I1','Coordinating Node Read Latency (ms)',title_format3)
-            sheet_obj.merge_range('K1:S1','Coordinating Node Write Latency (ms)',title_format3)
-            row[sheet_name]=1
-          elif sheet_name == 'ph':
-            row[sheet_name]=1
-          else:
-            row[sheet_name]=0
-          for col_num,header in enumerate(headers[sheet_name]):
-            if header != '':
-              sheet_obj.write(row[sheet_name],col_num,header,title_format)
-          for col_num,col_width in enumerate(col_widths[sheet_name]):
-            sheet_obj.set_column(col_num,col_num,col_width)
-          row[sheet_name]+=1
+          # collect data from the cfstats log file
+          ks = ''
+          tbl = ''
+          cfstat = rootPath + node_path + '/nodetool/cfstats'
+          cfstatFile = open(cfstat, 'r')
+          for line in cfstatFile:
+            if('Keyspace' in line):
+              ks = line.split(':')[1].strip()
+            elif('Table: ' in line and ks not in system_keyspace):
+              tbl = line.split(':')[1].strip()
+            elif(':' in line and ks not in system_keyspace):
+              header = line.split(':')[0].strip()
+              value = line.split(':')[1].strip()
+              row_data = [node,dc,ks,tbl,header,value]
+              for sheet_array in sheets_data:
+                if (sheet_array['sheet_name'] not in exclude_tab):
+                  if(sheet_array['cfstat_filter'] and sheet_array['cfstat_filter'] in line):
+                    value = line.split(':')[1].strip()
+                    row_data = [node,dc,ks,tbl,value]
+                    if (sheet_array['filter_type']):
+                      value = value.strip(sheet_array['strip'])
+                      if (sheet_array['filter_type']=='>=' and float(value)>=float(sheet_array['filter'])):
+                        if sheet_array['sheet_name']=='numTables' or sheet_array['sheet_name']=='partition':
+                          try:
+                            type(warnings['Astra Guardrails'][sheet_array['tab_name']])
+                          except:
+                            warnings['Astra Guardrails'][sheet_array['tab_name']]=[]
+                          if(sheet_array['sheet_name']=='numTables' and len(warnings['Astra Guardrails'][sheet_array['tab_name']])==0):
+                            if (float(value)>=gr_tblcnt):
+                              warnings['Astra Guardrails'][sheet_array['tab_name']].append(str(value) + ' tables in database***')
+                            else:
+                              warnings['Astra Guardrails'][sheet_array['tab_name']].append(str(value) + ' tables in database')
+                          elif sheet_array['sheet_name']=='partition':
+                            table_data = dc+ks+tbl
+                            if float(value)>=gr_lpar*1000000:
+                              if table_data not in lpar_gr_array:
+                                lpar_gr_array.append(table_data)
+                                warnings['Astra Guardrails'][sheet_array['tab_name']].append('Table '+dc+'.'+ks+'.'+tbl+' partition size '+str(int(value)/1000000)+ 'MB***')
+                            elif table_data not in lpar_tp_array:
+                              lpar_tp_array.append(table_data)
+                              warnings['Astra Guardrails'][sheet_array['tab_name']].append('Table '+dc+'.'+ks+'.'+tbl+' partition size '+str(int(value)/1000000)+ 'MB')
+                            row_data[4] = str(int(value)/1000000)
+                        else:
+                          warnings['Database Health'][sheet_array['tab_name']]=[sheet_array['tab_name'] + ' greater than '+str(sheet_array['filter'])]
+                            
+                        if(sheet_array['extra']):
+                          sheets_record[sheet_array['sheet_name']][row[sheet_array['sheet_name']]] = row_data
+                          row[sheet_array['sheet_name']]+=1
+                        else:
+                          write_row(sheet_array['sheet_name'],row_data,data_format)
 
-        # collect dc name
-        dc = ''
-        info = rootPath + node_path + '/nodetool/info'
-        infoFile = open(info, 'r')
-        for line in infoFile:
-          if('Data Center' in line):
-            dc = line.split(':')[1].strip()
-            try:
-              type(proxyhistData[dc])
-            except:
-              proxyhistData[dc]={}
+                    else:
+                      write_row(sheet_array['sheet_name'],row_data,data_format)
+          
+                    
 
-        # collect data from the cfstats log file
-        ks = ''
-        tbl = ''
-        cfstat = rootPath + node_path + '/nodetool/cfstats'
-        cfstatFile = open(cfstat, 'r')
-        for line in cfstatFile:
-          if('Keyspace' in line):
-            ks = line.split(':')[1].strip()
-          elif('Table: ' in line and ks not in system_keyspace):
-            tbl = line.split(':')[1].strip()
-          elif(':' in line and ks not in system_keyspace):
-            header = line.split(':')[0].strip()
-            value = line.split(':')[1].strip()
-            row_data = [node,dc,ks,tbl,header,value]
-            for sheet_array in sheets_data:
-              if (sheet_array['sheet_name'] not in exclude_tab):
-                if(sheet_array['cfstat_filter'] and sheet_array['cfstat_filter'] in line):
-                  value = line.split(':')[1].strip()
-                  row_data = [node,dc,ks,tbl,value]
-                  if (sheet_array['filter_type']):
-                    value = value.strip(sheet_array['strip'])
-                    if (sheet_array['filter_type']=='>=' and float(value)>=float(sheet_array['filter'])):
-                      if sheet_array['sheet_name']=='numTables' or sheet_array['sheet_name']=='partition':
-                        try:
-                          type(warnings['Astra Guardrails'][sheet_array['tab_name']])
-                        except:
-                          warnings['Astra Guardrails'][sheet_array['tab_name']]=[]
-                        if(sheet_array['sheet_name']=='numTables' and len(warnings['Astra Guardrails'][sheet_array['tab_name']])==0):
-                          if (float(value)>=gr_tblcnt):
-                            warnings['Astra Guardrails'][sheet_array['tab_name']].append(str(value) + ' tables in database***')
-                          else:
-                            warnings['Astra Guardrails'][sheet_array['tab_name']].append(str(value) + ' tables in database')
-                        elif sheet_array['sheet_name']=='partition':
-                          table_data = dc+ks+tbl
-                          if float(value)>=gr_lpar*1000000:
-                            if table_data not in lpar_gr_array:
-                              lpar_gr_array.append(table_data)
-                              warnings['Astra Guardrails'][sheet_array['tab_name']].append('Table '+dc+'.'+ks+'.'+tbl+' partition size '+str(int(value)/1000000)+ 'MB***')
-                          elif table_data not in lpar_tp_array:
-                            lpar_tp_array.append(table_data)
-                            warnings['Astra Guardrails'][sheet_array['tab_name']].append('Table '+dc+'.'+ks+'.'+tbl+' partition size '+str(int(value)/1000000)+ 'MB')
-                          row_data[4] = str(int(value)/1000000)
-                      else:
-                        warnings['Database Health'][sheet_array['tab_name']]=[sheet_array['tab_name'] + ' greater than '+str(sheet_array['filter'])]
-                          
-                      if(sheet_array['extra']):
-                        sheets_record[sheet_array['sheet_name']][row[sheet_array['sheet_name']]] = row_data
-                        row[sheet_array['sheet_name']]+=1
-                      else:
-                        write_row(sheet_array['sheet_name'],row_data,data_format)
-
+          # organize key data
+          key_record = {}
+          key_data = {}
+          for sheet_array in sheets_data:
+            if (sheet_array['sheet_name'] not in exclude_tab):
+              if(sheet_array['extra']):
+                row[sheet_array['sheet_name']]=1
+                for record_num,record in list(sheets_record[sheet_array['sheet_name']].items()):
+                  new_key = sheet_array['sheet_name']+'_'+record[2]+'_'+record[3]
+                  if hasattr(key_record,new_key) :
+                    if(key_record[new_key] < record[4]):
+                      key_record[new_key] = record[4]
+                      key_data[new_key] = record
                   else:
-                    write_row(sheet_array['sheet_name'],row_data,data_format)
-        
-                  
-
-        # organize key data
-        key_record = {}
-        key_data = {}
-        for sheet_array in sheets_data:
-          if (sheet_array['sheet_name'] not in exclude_tab):
-            if(sheet_array['extra']):
-              row[sheet_array['sheet_name']]=1
-              for record_num,record in list(sheets_record[sheet_array['sheet_name']].items()):
-                new_key = sheet_array['sheet_name']+'_'+record[2]+'_'+record[3]
-                if hasattr(key_record,new_key) :
-                  if(key_record[new_key] < record[4]):
                     key_record[new_key] = record[4]
                     key_data[new_key] = record
-                else:
-                  key_record[new_key] = record[4]
-                  key_data[new_key] = record
 
-        # collect node R/W latency data - coordinator level latencies
-        proxyhist = rootPath + node_path + '/nodetool/proxyhistograms'
-        proxyhist_exists = os.path.exists(proxyhist)
+          # collect node R/W latency data - coordinator level latencies
+          proxyhist = rootPath + node_path + '/nodetool/proxyhistograms'
+          proxyhist_exists = os.path.exists(proxyhist)
 
-        if (proxyhist_exists):
-          proxyhistFile = open(proxyhist, 'r')
-          proxyhistData[dc][node] = {'Max':{},'99%':{},'98%':{},'95%':{},'75%':{},'50%':{},'Min':{}}
-          for line in proxyhistFile:
-            if('%' in line or 'Min' in line or 'Max' in line):
-              values = line.split();
-              try:
-                proxyhistData[dc][node][values[0]]['R']=float(values[1])/1000
-                proxyhistData[dc][node][values[0]]['W']=float(values[2])/1000
-              except:
-                proxyhistData[dc][node][values[0]]['R']=float(0)
-                proxyhistData[dc][node][values[0]]['W']=float(0)        
-        
-        for row_key in key_record:
-          write_row(row_key.split('_')[0],key_data[row_key],data_format)
+          if (proxyhist_exists):
+            proxyhistFile = open(proxyhist, 'r')
+            proxyhistData[dc][node] = {'Max':{},'99%':{},'98%':{},'95%':{},'75%':{},'50%':{},'Min':{}}
+            for line in proxyhistFile:
+              if('%' in line or 'Min' in line or 'Max' in line):
+                values = line.split();
+                try:
+                  proxyhistData[dc][node][values[0]]['R']=float(values[1])/1000
+                  proxyhistData[dc][node][values[0]]['W']=float(values[2])/1000
+                except:
+                  proxyhistData[dc][node][values[0]]['R']=float(0)
+                  proxyhistData[dc][node][values[0]]['W']=float(0)        
+          
+          for row_key in key_record:
+            write_row(row_key.split('_')[0],key_data[row_key],data_format)
 
 
 
@@ -1853,6 +1905,12 @@ for database_url in data_url:
   with open(database_url + '/' + 'summary.json', 'w') as jsonfile:
       json.dump(summary_json, jsonfile)
   
+  with open(database_url + '/' + 'node_rw.json', 'w') as jsonfile:
+      json.dump(node_rw_count, jsonfile)
+      
+  with open(database_url + '/' + 'node_status_data.json', 'w') as jsonfile:
+      json.dump(node_status_data, jsonfile)
+
   print((('"' + database_name + '_' + 'astra_chart' + '.xlsx"' + ' was created in "' + database_url) +'"'))
 exit();
 
